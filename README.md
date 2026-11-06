@@ -27,8 +27,8 @@ The sections below are for making the Mac app and the Windows program from this 
 cd "/Users/mohammed.farhank/Desktop/YT downloader"
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt pyinstaller
-curl -L "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-macosarm64-gpl.zip" -o ffmpeg.zip
-unzip -j ffmpeg.zip "*/bin/ffmpeg" -d .
+curl -L "https://github.com/eugeneware/ffmpeg-static/releases/latest/download/ffmpeg-darwin-arm64.gz" -o ffmpeg.gz
+gunzip -c ffmpeg.gz > ffmpeg
 chmod +x ffmpeg
 curl -L "https://github.com/denoland/deno/releases/latest/download/deno-aarch64-apple-darwin.zip" -o deno.zip
 unzip -o deno.zip
@@ -37,7 +37,7 @@ chmod +x deno
 open dist/YTHistoryMusic.app
 ```
 
-That ffmpeg download is for Apple Silicon. On an Intel Mac, use `ffmpeg-master-latest-macos64-gpl.zip` instead.
+That ffmpeg download is for Apple Silicon. On an Intel Mac, download `ffmpeg-darwin-x64.gz` from the same place instead.
 
 The finished app is `dist/YTHistoryMusic.app`. On another Mac, right-click the app, choose Open, then Open again the first time.
 
