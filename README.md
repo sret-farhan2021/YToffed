@@ -1,8 +1,27 @@
 # YouTube History Songs
 
-Builds a Mac app and a Windows folder with an `.exe`. The `.exe` is not one loose file: share the whole `dist/YTHistoryMusic` folder.
+You already listen to songs on YouTube. This app looks through that watch history, keeps the songs, and saves them as music files on your computer.
 
-## Mac app, on a Mac
+It works for songs in any language. A Tamil film song, a Hindi track, a Korean release, and an English song are all treated as music. Cooking videos, tutorials, news, reviews, and short clips are left out.
+
+## How to use it
+
+1. Open the app.
+2. Choose the browser you use for YouTube. You need to be signed in there.
+3. Choose how far back to look, or leave it at the last 100 videos.
+4. Press **Start**.
+
+While it runs you see the song being saved right now, a few songs waiting after it, and the songs already finished. You can pause, skip the current song, or stop after the current song.
+
+Finished songs go to your Downloads folder, in a folder named `Downloaded_Songs`. Click a saved song in the app to show it in Finder on a Mac, or in File Explorer on Windows. If a song was saved before, it shows as already saved and is not downloaded again.
+
+The first time the app reads Chrome on a Mac, the computer asks for your login password. That lets it see which videos you watched. Allow it once. The next time you press Start, it does not ask again.
+
+## Building the app
+
+The sections below are for making the Mac app and the Windows program from this source code. You can skip them if you already have the app.
+
+### On a Mac
 
 ```bash
 cd "/Users/mohammed.farhank/Desktop/YT downloader"
@@ -20,35 +39,15 @@ open dist/YTHistoryMusic.app
 
 That ffmpeg download is for Apple Silicon. On an Intel Mac, use `ffmpeg-master-latest-macos64-gpl.zip` instead.
 
-The first time the app reads Chrome, macOS asks for the login keychain password. Allow it once. Later runs reuse the saved login and do not ask again. To sign in again, delete:
+The finished app is `dist/YTHistoryMusic.app`. On another Mac, right-click the app, choose Open, then Open again the first time.
+
+To make the app ask for the Chrome login again, delete the saved login:
 
 ```bash
 rm "$HOME/Library/Application Support/YTHistoryMusic/cookies-chrome.txt"
 ```
 
-On another Mac, the app is not notarized. Right-click it, choose Open, then Open again.
-
-## Mac app, without a Mac
-
-1. Create a GitHub repository and push this project:
-
-```bash
-cd "/Users/mohammed.farhank/Desktop/YT downloader"
-git init
-git add .
-git commit -m "Add YouTube history song downloader"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/yt-music-downloader.git
-git push -u origin main
-```
-
-2. Open the repository on GitHub and click **Actions**.
-3. Open **Build Mac app and Windows exe**. If it is not already running, click **Run workflow**.
-4. When the run is green, download the **YTHistoryMusic-macOS** artifact.
-
-The GitHub Mac build is Apple Silicon.
-
-## Windows exe, on Windows
+### On Windows
 
 In PowerShell, from the project folder:
 
@@ -63,8 +62,15 @@ Expand-Archive -Path "deno.zip" -DestinationPath "."
 .venv\Scripts\pyinstaller --noconfirm YTHistoryMusic.spec
 ```
 
-The app is `dist\YTHistoryMusic\YTHistoryMusic.exe`. Zip the whole `dist\YTHistoryMusic` folder before you send it. The `.exe` alone will not start.
+The program is `dist\YTHistoryMusic\YTHistoryMusic.exe`. Zip the whole `dist\YTHistoryMusic` folder before you send it to someone. The `.exe` by itself will not start.
 
-## Windows exe, without Windows
+### Without a Mac or without Windows
 
-Use the same GitHub Actions run as the Mac build. Download the **YTHistoryMusic-Windows** artifact. Unzip it and run `YTHistoryMusic.exe`.
+GitHub can build both for you.
+
+1. Open [the Actions page](https://github.com/sret-farhan2021/YToffed/actions).
+2. Open **Build Mac app and Windows exe**.
+3. When the run is green, download **YTHistoryMusic-macOS** or **YTHistoryMusic-Windows**.
+4. Unzip it and open the app. On Windows, run `YTHistoryMusic.exe` from inside the unzipped folder.
+
+The Mac file from GitHub is for Apple Silicon.
