@@ -1,0 +1,3 @@
+yt-dlp>=2026.10.26
+customtkinter>=5.2.0
+Pillow>=10.0.0

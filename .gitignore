@@ -1,0 +1,13 @@
+.DS_Store
+.venv/
+build/
+dist/
+__pycache__/
+*.pyc
+Downloaded_Songs/
+Downloaded_Songs_Skipped/
+downloaded_archive.txt
+ffmpeg
+ffmpeg.exe
+deno
+deno.exe
