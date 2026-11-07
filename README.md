@@ -1,6 +1,10 @@
 # YouTube History Songs
 
-You already listen to songs on YouTube. This app looks through that watch history, keeps the songs, and saves them as music files on your computer.
+For personal use only. You are responsible for complying with YouTube’s Terms of Service and copyright law.
+
+This is a small personal tool. It looks at videos you already watched in your own browser and can save the songs from that list on your own computer. It is not a general music downloader, and the finished app is not meant to be passed around.
+
+Share this repository and the build steps below. Build the app on your own Mac or Windows computer.
 
 It works for songs in any language. A Tamil film song, a Hindi track, a Korean release, and an English song are all treated as music. Cooking videos, tutorials, news, reviews, and short clips are left out.
 
@@ -21,7 +25,7 @@ On Windows, Chrome encrypts its login so the app cannot read it. Press Start any
 
 ## Building the app
 
-The sections below are for making the Mac app and the Windows program from this source code. You can skip them if you already have the app.
+Build it from this repository. These steps make the app on your own computer.
 
 ### On a Mac
 
@@ -64,11 +68,11 @@ Expand-Archive -Path "deno.zip" -DestinationPath "."
 .venv\Scripts\pyinstaller --noconfirm YTHistoryMusic.spec
 ```
 
-The program is the single file `dist\YTHistoryMusic.exe`. Send that file. The first open is slower because Windows unpacks it.
+The program is the single file `dist\YTHistoryMusic.exe` on that computer. The first open is slower because Windows unpacks it.
 
-### Without a Mac or without Windows
+### If you do not have both a Mac and a Windows PC
 
-GitHub can build both for you.
+You can build your own copy with GitHub Actions. This is for making the app for yourself, not for handing the finished files to other people.
 
 1. Open [the Actions page](https://github.com/sret-farhan2021/YToffed/actions).
 2. Open **Build Mac app and Windows exe**.

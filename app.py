@@ -557,10 +557,27 @@ class YTHistoryMusicApp(ctk.CTk):
         ).pack(anchor="w")
         ctk.CTkLabel(
             header,
-            text="Songs from your watch history, in any language.",
+            text="Saves songs from your own watch history, for personal use.",
             font=ctk.CTkFont(family="Helvetica Neue", size=13),
             text_color=MUTED,
         ).pack(anchor="w", pady=(2, 0))
+        ctk.CTkLabel(
+            header,
+            text="For personal use only. You are responsible for complying with YouTube’s Terms of Service and copyright law.",
+            font=ctk.CTkFont(family="Helvetica Neue", size=12),
+            text_color=DIM,
+            wraplength=920,
+            justify="left",
+        ).pack(anchor="w", pady=(8, 0))
+        if sys.platform == "darwin":
+            ctk.CTkLabel(
+                header,
+                text="On a Mac, the first time you press Start, the computer asks for your login password. That lets the app read Chrome. Allow it once. It does not ask again.",
+                font=ctk.CTkFont(family="Helvetica Neue", size=12),
+                text_color=MUTED,
+                wraplength=920,
+                justify="left",
+            ).pack(anchor="w", pady=(4, 0))
 
         controls = ctk.CTkFrame(self, fg_color=CARD, corner_radius=16)
         controls.grid(row=1, column=0, sticky="ew", padx=22, pady=(4, 8))
