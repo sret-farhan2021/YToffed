@@ -54,7 +54,14 @@ def cookie_path(browser):
     return str(support_dir() / f"cookies-{browser}.txt")
 
 
-def _copy_locked_windows_file(source, destination):
+def _chrome_login_error(source, err):
+    code = getattr(err, "winerror", None)
+    if not code:
+        code = getattr(err, "errno", None)
+    return OSError(f"Could not read Chrome's login file: {source} (Windows error {code})")
+
+
+def _read_with_shared_access(source):
     """Read a file another program still has open."""
     import ctypes
     from ctypes import wintypes
@@ -75,34 +82,90 @@ def _copy_locked_windows_file(source, destination):
     generic_read = 0x80000000
     share = 0x1 | 0x2 | 0x4
     open_existing = 3
-    flags = 0x80 | 0x02000000
     invalid = ctypes.c_void_p(-1).value
 
-    handle = kernel32.CreateFileW(source, generic_read, share, None, open_existing, flags, None)
+    handle = kernel32.CreateFileW(source, generic_read, share, None, open_existing, 0x80, None)
     if handle in (invalid, None, 0):
-        raise OSError(f"Could not open {source} (Windows error {ctypes.get_last_error()})")
+        raise OSError(f"Could not read Chrome's login file: {source} (Windows error {ctypes.get_last_error()})")
     try:
         chunk = ctypes.create_string_buffer(1024 * 1024)
         read = wintypes.DWORD()
-        with open(destination, "wb") as output:
-            while True:
-                ok = kernel32.ReadFile(handle, chunk, len(chunk), ctypes.byref(read), None)
-                if not ok or read.value == 0:
-                    break
-                output.write(chunk.raw[: read.value])
+        pieces = []
+        while True:
+            ok = kernel32.ReadFile(handle, chunk, len(chunk), ctypes.byref(read), None)
+            if not ok:
+                raise OSError(f"Could not read Chrome's login file: {source} (Windows error {ctypes.get_last_error()})")
+            if read.value == 0:
+                break
+            pieces.append(chunk.raw[: read.value])
     finally:
         kernel32.CloseHandle(handle)
+    return b"".join(pieces)
+
+
+def _read_cookie_bytes(source):
+    try:
+        with open(source, "rb") as handle:
+            return handle.read()
+    except PermissionError as err:
+        try:
+            return _read_with_shared_access(source)
+        except OSError:
+            raise _chrome_login_error(source, err) from err
+
+
+def _write_bytes(destination, data):
+    with open(destination, "wb") as output:
+        output.write(data)
 
 
 def _copy_cookie_files(database_path, destination):
-    _copy_locked_windows_file(database_path, destination)
+    data = _read_cookie_bytes(database_path)
+    if not data:
+        raise OSError(f"Could not read Chrome's login file: {database_path} (Windows error 0)")
+    _write_bytes(destination, data)
     for suffix in ("-wal", "-shm"):
         side_file = database_path + suffix
-        if os.path.exists(side_file):
+        if os.path.isfile(side_file):
             try:
-                _copy_locked_windows_file(side_file, destination + suffix)
+                _write_bytes(destination + suffix, _read_cookie_bytes(side_file))
             except OSError:
                 pass
+
+
+def _chrome_cookie_candidates(database_path):
+    """User profiles only. The newest Cookies file can be a system profile we cannot read."""
+    user_data = None
+    current = os.path.dirname(os.path.abspath(database_path))
+    for _ in range(8):
+        if os.path.basename(current).lower() == "user data":
+            user_data = current
+            break
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    found = []
+    if user_data and os.path.isdir(user_data):
+        try:
+            names = os.listdir(user_data)
+        except OSError:
+            names = []
+        for name in names:
+            if name in ("System Profile", "Guest Profile"):
+                continue
+            for parts in (("Network", "Cookies"), ("Cookies",)):
+                candidate = os.path.join(user_data, name, *parts)
+                if os.path.isfile(candidate):
+                    found.append(candidate)
+    if os.path.isfile(database_path) and "System Profile" not in database_path and "Guest Profile" not in database_path:
+        found.append(database_path)
+    unique = []
+    for path in found:
+        if path not in unique:
+            unique.append(path)
+    unique.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+    return unique or [database_path]
 
 
 def _copy_while_unlocked(path, destination):
@@ -158,29 +221,66 @@ def _copy_while_unlocked(path, destination):
         rstrtmgr.RmEndSession(session)
 
 
-def _copy_chrome_database(database_path, destination):
+def _file_lock_count(path):
+    import ctypes
+    from ctypes import wintypes
+
+    rstrtmgr = ctypes.WinDLL("Rstrtmgr")
+    rstrtmgr.RmStartSession.argtypes = [ctypes.POINTER(wintypes.DWORD), wintypes.DWORD, wintypes.LPWSTR]
+    rstrtmgr.RmRegisterResources.argtypes = [
+        wintypes.DWORD, wintypes.UINT, ctypes.POINTER(wintypes.LPCWSTR),
+        wintypes.UINT, ctypes.c_void_p, wintypes.UINT, ctypes.c_void_p,
+    ]
+    rstrtmgr.RmGetList.argtypes = [
+        wintypes.DWORD, ctypes.POINTER(wintypes.UINT), ctypes.POINTER(wintypes.UINT),
+        ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD),
+    ]
+    rstrtmgr.RmEndSession.argtypes = [wintypes.DWORD]
+    for name in ("RmStartSession", "RmRegisterResources", "RmGetList", "RmEndSession"):
+        getattr(rstrtmgr, name).restype = wintypes.DWORD
+    session = wintypes.DWORD()
+    key = ctypes.create_unicode_buffer(33)
+    if rstrtmgr.RmStartSession(ctypes.byref(session), 0, key) != 0:
+        return 0
     try:
-        _copy_cookie_files(database_path, destination)
-        return
-    except OSError:
-        pass
-    allowed = messagebox.askyesno(
-        "Chrome is open",
-        "Chrome is locking its login, so your watch history cannot be read.\n\n"
-        "Chrome will close for a moment and then open again. Continue?",
-    )
-    if not allowed:
-        raise RuntimeError("Quit Chrome completely, including the tray icon, then press Start again.")
-    if not _copy_while_unlocked(database_path, destination):
-        raise RuntimeError("Quit Chrome completely, including the tray icon, then press Start again.")
+        files = (wintypes.LPCWSTR * 1)(path)
+        if rstrtmgr.RmRegisterResources(session, 1, files, 0, None, 0, None) != 0:
+            return 0
+        needed = wintypes.UINT(0)
+        count = wintypes.UINT(0)
+        reasons = wintypes.DWORD()
+        if rstrtmgr.RmGetList(session, ctypes.byref(needed), ctypes.byref(count), None, ctypes.byref(reasons)) not in (0, 234):
+            return 0
+        return needed.value
+    finally:
+        rstrtmgr.RmEndSession(session)
 
 
 def _open_chrome_database(database_path, tmpdir):
     import sqlite3
 
     copy_path = os.path.join(tmpdir, "temporary.sqlite")
-    _copy_chrome_database(database_path, copy_path)
-    return sqlite3.connect(copy_path).cursor()
+    candidates = _chrome_cookie_candidates(database_path)
+    first_error = None
+    for candidate in candidates:
+        try:
+            _copy_cookie_files(candidate, copy_path)
+            return sqlite3.connect(copy_path).cursor()
+        except OSError as err:
+            if first_error is None:
+                first_error = err
+            if _file_lock_count(candidate) <= 0:
+                continue
+            if messagebox.askyesno(
+                "Chrome is open",
+                "Chrome is locking its login, so your watch history cannot be read.\n\n"
+                "Chrome will close for a moment and then open again. Continue?",
+            ) and _copy_while_unlocked(candidate, copy_path):
+                return sqlite3.connect(copy_path).cursor()
+            break
+    if first_error is not None:
+        raise RuntimeError(str(first_error))
+    raise RuntimeError(f"Could not read Chrome's login file: {database_path}")
 
 
 def _use_windows_cookie_copy():
@@ -199,10 +299,14 @@ def _cookie_failure_text(exc):
     while current is not None and current not in seen:
         seen.append(current)
         current = current.__cause__ or current.__context__
-    text = " ".join(str(item) for item in seen)
-    if "7271" in text or "cookie database" in text.lower() or "Quit Chrome" in text:
-        return "Quit Chrome completely, including the tray icon, then press Start again."
-    return str(exc).replace("ERROR: ", "").strip()
+    for item in seen:
+        text = str(item).replace("ERROR: ", "").strip()
+        if "login file" in text:
+            return text
+    text = str(exc).replace("ERROR: ", "").strip()
+    if "7271" in text or "cookie database" in text.lower():
+        return "Windows blocked Chrome's login file. In Task Manager, end every Chrome process, including background processes, then press Start again."
+    return text
 
 
 def prepare_cookie_file(browser):
