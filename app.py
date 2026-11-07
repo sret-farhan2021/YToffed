@@ -10,7 +10,7 @@ from pathlib import Path
 
 import customtkinter as ctk
 from PIL import Image
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 import yt_dlp
 from yt_dlp.utils import DownloadCancelled
 
@@ -55,7 +55,7 @@ def cookie_path(browser):
 
 
 def _copy_locked_windows_file(source, destination):
-    """Read a file Chrome still has open. A normal copy is denied on Windows."""
+    """Read a file another program still has open."""
     import ctypes
     from ctypes import wintypes
 
@@ -65,6 +65,7 @@ def _copy_locked_windows_file(source, destination):
         wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
         ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
     ]
+    kernel32.ReadFile.restype = wintypes.BOOL
     kernel32.ReadFile.argtypes = [
         wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD,
         ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p,
@@ -74,12 +75,12 @@ def _copy_locked_windows_file(source, destination):
     generic_read = 0x80000000
     share = 0x1 | 0x2 | 0x4
     open_existing = 3
-    normal = 0x80
-    invalid = wintypes.HANDLE(-1).value
+    flags = 0x80 | 0x02000000
+    invalid = ctypes.c_void_p(-1).value
 
-    handle = kernel32.CreateFileW(source, generic_read, share, None, open_existing, normal, None)
-    if handle == invalid:
-        raise PermissionError(13, f"Could not open {source} (Windows error {ctypes.get_last_error()})", source)
+    handle = kernel32.CreateFileW(source, generic_read, share, None, open_existing, flags, None)
+    if handle in (invalid, None, 0):
+        raise OSError(f"Could not open {source} (Windows error {ctypes.get_last_error()})")
     try:
         chunk = ctypes.create_string_buffer(1024 * 1024)
         read = wintypes.DWORD()
@@ -93,18 +94,92 @@ def _copy_locked_windows_file(source, destination):
         kernel32.CloseHandle(handle)
 
 
-def _open_chrome_database(database_path, tmpdir):
-    import sqlite3
-
-    copy_path = os.path.join(tmpdir, "temporary.sqlite")
-    _copy_locked_windows_file(database_path, copy_path)
+def _copy_cookie_files(database_path, destination):
+    _copy_locked_windows_file(database_path, destination)
     for suffix in ("-wal", "-shm"):
         side_file = database_path + suffix
         if os.path.exists(side_file):
             try:
-                _copy_locked_windows_file(side_file, copy_path + suffix)
+                _copy_locked_windows_file(side_file, destination + suffix)
             except OSError:
                 pass
+
+
+def _copy_while_unlocked(path, destination):
+    """Close whatever is locking the file, copy it, then start that program again."""
+    import ctypes
+    from ctypes import wintypes
+
+    rstrtmgr = ctypes.WinDLL("Rstrtmgr")
+    rstrtmgr.RmStartSession.argtypes = [ctypes.POINTER(wintypes.DWORD), wintypes.DWORD, wintypes.LPWSTR]
+    rstrtmgr.RmRegisterResources.argtypes = [
+        wintypes.DWORD, wintypes.UINT, ctypes.POINTER(wintypes.LPCWSTR),
+        wintypes.UINT, ctypes.c_void_p, wintypes.UINT, ctypes.c_void_p,
+    ]
+    rstrtmgr.RmGetList.argtypes = [
+        wintypes.DWORD, ctypes.POINTER(wintypes.UINT), ctypes.POINTER(wintypes.UINT),
+        ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD),
+    ]
+    rstrtmgr.RmShutdown.argtypes = [wintypes.DWORD, wintypes.ULONG, ctypes.c_void_p]
+    rstrtmgr.RmRestart.argtypes = [wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p]
+    rstrtmgr.RmEndSession.argtypes = [wintypes.DWORD]
+    for name in ("RmStartSession", "RmRegisterResources", "RmGetList", "RmShutdown", "RmRestart", "RmEndSession"):
+        getattr(rstrtmgr, name).restype = wintypes.DWORD
+
+    session = wintypes.DWORD()
+    key = ctypes.create_unicode_buffer(33)
+    if rstrtmgr.RmStartSession(ctypes.byref(session), 0, key) != 0:
+        return False
+    closed = False
+    try:
+        files = (wintypes.LPCWSTR * 1)(path)
+        if rstrtmgr.RmRegisterResources(session, 1, files, 0, None, 0, None) != 0:
+            return False
+        needed = wintypes.UINT(0)
+        count = wintypes.UINT(0)
+        reasons = wintypes.DWORD()
+        if rstrtmgr.RmGetList(session, ctypes.byref(needed), ctypes.byref(count), None, ctypes.byref(reasons)) not in (0, 234):
+            return False
+        if needed.value > 0 and rstrtmgr.RmShutdown(session, 1, None) != 0:
+            return False
+        closed = needed.value > 0
+        for _ in range(20):
+            try:
+                _copy_cookie_files(path, destination)
+                return True
+            except OSError:
+                if not closed:
+                    return False
+                time.sleep(0.25)
+        return False
+    finally:
+        if closed:
+            rstrtmgr.RmRestart(session, 0, None)
+        rstrtmgr.RmEndSession(session)
+
+
+def _copy_chrome_database(database_path, destination):
+    try:
+        _copy_cookie_files(database_path, destination)
+        return
+    except OSError:
+        pass
+    allowed = messagebox.askyesno(
+        "Chrome is open",
+        "Chrome is locking its login, so your watch history cannot be read.\n\n"
+        "Chrome will close for a moment and then open again. Continue?",
+    )
+    if not allowed:
+        raise RuntimeError("Quit Chrome completely, including the tray icon, then press Start again.")
+    if not _copy_while_unlocked(database_path, destination):
+        raise RuntimeError("Quit Chrome completely, including the tray icon, then press Start again.")
+
+
+def _open_chrome_database(database_path, tmpdir):
+    import sqlite3
+
+    copy_path = os.path.join(tmpdir, "temporary.sqlite")
+    _copy_chrome_database(database_path, copy_path)
     return sqlite3.connect(copy_path).cursor()
 
 
@@ -118,6 +193,18 @@ def _use_windows_cookie_copy():
 _use_windows_cookie_copy()
 
 
+def _cookie_failure_text(exc):
+    seen = []
+    current = exc
+    while current is not None and current not in seen:
+        seen.append(current)
+        current = current.__cause__ or current.__context__
+    text = " ".join(str(item) for item in seen)
+    if "7271" in text or "cookie database" in text.lower() or "Quit Chrome" in text:
+        return "Quit Chrome completely, including the tray icon, then press Start again."
+    return str(exc).replace("ERROR: ", "").strip()
+
+
 def prepare_cookie_file(browser):
     """Read the browser login once, then reuse the saved cookie file.
 
@@ -128,13 +215,16 @@ def prepare_cookie_file(browser):
     path = cookie_path(browser)
     if os.path.isfile(path) and os.path.getsize(path) > 0:
         return path
-    with yt_dlp.YoutubeDL({
-        "cookiesfrombrowser": (browser,),
-        "cookiefile": path,
-        "quiet": True,
-        "no_warnings": True,
-    }) as ydl:
-        ydl.cookiejar  # load once; saving happens when the downloader closes
+    try:
+        with yt_dlp.YoutubeDL({
+            "cookiesfrombrowser": (browser,),
+            "cookiefile": path,
+            "quiet": True,
+            "no_warnings": True,
+        }) as ydl:
+            ydl.cookiejar  # load once; saving happens when the downloader closes
+    except Exception as exc:
+        raise RuntimeError(_cookie_failure_text(exc)) from exc
     if not os.path.isfile(path) or os.path.getsize(path) == 0:
         raise RuntimeError(f"Could not save a login from {browser}")
     return path
@@ -473,7 +563,7 @@ class YTHistoryMusicApp(ctk.CTk):
         self._output = self.output_dir_var.get()
         self.archive_path = os.path.join(self._output, "downloaded_archive.txt")
         self.archived_ids = load_archive_ids(self.archive_path)
-        self.status_var.set("Reading the browser login. The keychain prompt appears only the first time.")
+        self.status_var.set("Reading the browser login…")
         self.update_idletasks()
         try:
             self._cookie_file = prepare_cookie_file(self._browser)

@@ -17,6 +17,8 @@ Finished songs go to your Downloads folder, in a folder named `Downloaded_Songs`
 
 The first time the app reads Chrome on a Mac, the computer asks for your login password. That lets it see which videos you watched. Allow it once. The next time you press Start, it does not ask again.
 
+On Windows, Chrome locks that same login while it is open. If Start asks, let the app close Chrome for a moment. Chrome opens again on its own. If that still fails, quit Chrome completely, including the tray icon, then press Start.
+
 ## Building the app
 
 The sections below are for making the Mac app and the Windows program from this source code. You can skip them if you already have the app.
