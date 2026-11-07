@@ -54,6 +54,70 @@ def cookie_path(browser):
     return str(support_dir() / f"cookies-{browser}.txt")
 
 
+def _copy_locked_windows_file(source, destination):
+    """Read a file Chrome still has open. A normal copy is denied on Windows."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+        ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    kernel32.ReadFile.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p,
+    ]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    generic_read = 0x80000000
+    share = 0x1 | 0x2 | 0x4
+    open_existing = 3
+    normal = 0x80
+    invalid = wintypes.HANDLE(-1).value
+
+    handle = kernel32.CreateFileW(source, generic_read, share, None, open_existing, normal, None)
+    if handle == invalid:
+        raise PermissionError(13, f"Could not open {source} (Windows error {ctypes.get_last_error()})", source)
+    try:
+        chunk = ctypes.create_string_buffer(1024 * 1024)
+        read = wintypes.DWORD()
+        with open(destination, "wb") as output:
+            while True:
+                ok = kernel32.ReadFile(handle, chunk, len(chunk), ctypes.byref(read), None)
+                if not ok or read.value == 0:
+                    break
+                output.write(chunk.raw[: read.value])
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _open_chrome_database(database_path, tmpdir):
+    import sqlite3
+
+    copy_path = os.path.join(tmpdir, "temporary.sqlite")
+    _copy_locked_windows_file(database_path, copy_path)
+    for suffix in ("-wal", "-shm"):
+        side_file = database_path + suffix
+        if os.path.exists(side_file):
+            try:
+                _copy_locked_windows_file(side_file, copy_path + suffix)
+            except OSError:
+                pass
+    return sqlite3.connect(copy_path).cursor()
+
+
+def _use_windows_cookie_copy():
+    if sys.platform != "win32":
+        return
+    import yt_dlp.cookies as cookies
+    cookies._open_database_copy = _open_chrome_database
+
+
+_use_windows_cookie_copy()
+
+
 def prepare_cookie_file(browser):
     """Read the browser login once, then reuse the saved cookie file.
 
