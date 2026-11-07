@@ -1,7 +1,10 @@
 import os
+import re
 import sys
 import time
 import queue
+import sqlite3
+import tempfile
 import threading
 import subprocess
 import urllib.request
@@ -334,6 +337,104 @@ def prepare_cookie_file(browser):
     return path
 
 
+_VIDEO_ID = re.compile(r"(?:[?&]v=|youtu\.be/|shorts/|embed/)([A-Za-z0-9_-]{11})")
+
+
+def _chromium_user_data(browser):
+    local = os.environ.get("LOCALAPPDATA", "")
+    roaming = os.environ.get("APPDATA", "")
+    paths = {
+        "chrome": [os.path.join(local, "Google", "Chrome", "User Data")],
+        "edge": [os.path.join(local, "Microsoft", "Edge", "User Data")],
+        "brave": [os.path.join(local, "BraveSoftware", "Brave-Browser", "User Data")],
+        "opera": [
+            os.path.join(roaming, "Opera Software", "Opera Stable"),
+            os.path.join(local, "Opera Software", "Opera Stable"),
+        ],
+    }
+    for path in paths.get(browser, []):
+        if path and os.path.isdir(path):
+            return path
+    return None
+
+
+def _history_files(browser):
+    root = _chromium_user_data(browser)
+    if not root:
+        return []
+    found = []
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return []
+    for name in names:
+        if name in ("System Profile", "Guest Profile"):
+            continue
+        path = os.path.join(root, name, "History")
+        if os.path.isfile(path):
+            found.append(path)
+    found.sort(key=os.path.getmtime, reverse=True)
+    return found
+
+
+def _copy_history_file(source, destination):
+    try:
+        _copy_cookie_files(source, destination)
+        return
+    except OSError:
+        pass
+    if _file_lock_count(source) > 0 and messagebox.askyesno(
+        "Chrome is open",
+        "Chrome is locking its history, so the video list cannot be read.\n\n"
+        "Chrome will close for a moment and then open again. Continue?",
+    ):
+        if _copy_while_unlocked(source, destination):
+            return
+    raise RuntimeError("Could not read Chrome's history. Quit Chrome, including background processes, then press Start again.")
+
+
+def local_history_entries(browser, depth):
+    """YouTube videos Chrome has already stored. The login itself cannot be decrypted."""
+    files = _history_files(browser)
+    if not files:
+        raise RuntimeError(f"Could not find {browser} history on this computer.")
+    limit = None if depth == "All" else int(depth)
+    seen = set()
+    entries = []
+    for source in files:
+        with tempfile.TemporaryDirectory(prefix="ythistory") as tmpdir:
+            copy_path = os.path.join(tmpdir, "History")
+            _copy_history_file(source, copy_path)
+            connection = sqlite3.connect(copy_path)
+            try:
+                rows = connection.execute(
+                    "SELECT url, title FROM urls "
+                    "WHERE url LIKE '%youtube.com/%' OR url LIKE '%youtu.be/%' "
+                    "ORDER BY last_visit_time DESC"
+                ).fetchall()
+            except sqlite3.Error as err:
+                raise RuntimeError("Chrome's history file could not be read.") from err
+            finally:
+                connection.close()
+        for url, title in rows:
+            match = _VIDEO_ID.search(url or "")
+            if not match or match.group(1) in seen:
+                continue
+            seen.add(match.group(1))
+            clean = (title or "Unknown").removesuffix(" - YouTube").strip() or "Unknown"
+            entries.append({
+                "id": match.group(1),
+                "title": clean,
+                "url": f"https://www.youtube.com/watch?v={match.group(1)}",
+                "webpage_url": f"https://www.youtube.com/watch?v={match.group(1)}",
+            })
+            if limit is not None and len(entries) >= limit:
+                return entries
+        if entries:
+            return entries
+    return entries
+
+
 def get_binary_path(name):
     exe_name = f"{name}.exe" if sys.platform == "win32" else name
     bundled = os.path.join(get_bundle_dir(), exe_name)
@@ -422,6 +523,8 @@ class YTHistoryMusicApp(ctk.CTk):
         self.resume_event.set()
 
         self.running = False
+        self._cookie_file = None
+        self._use_local_history = False
         self.upcoming = []
         self.archived_ids = set()
         self.archive_path = ""
@@ -669,12 +772,18 @@ class YTHistoryMusicApp(ctk.CTk):
         self.archived_ids = load_archive_ids(self.archive_path)
         self.status_var.set("Reading the browser login…")
         self.update_idletasks()
+        self._use_local_history = False
         try:
             self._cookie_file = prepare_cookie_file(self._browser)
         except Exception as exc:
-            self._set_running(False)
-            self.status_var.set(f"Could not read the browser login: {exc}")
-            return
+            if sys.platform == "win32" and _chromium_user_data(self._browser):
+                self._cookie_file = None
+                self._use_local_history = True
+                self.status_var.set("Chrome encrypts its login, so this uses the videos saved in Chrome's history.")
+            else:
+                self._set_running(False)
+                self.status_var.set(f"Could not read the browser login: {exc}")
+                return
 
         threading.Thread(target=self._scanner, daemon=True).start()
         threading.Thread(target=self._downloader, daemon=True).start()
@@ -708,31 +817,38 @@ class YTHistoryMusicApp(ctk.CTk):
         depth = self._depth
         deno_bin = get_binary_path("deno")
         scan_opts = {
-            "cookiefile": self._cookie_file,
             "extract_flat": True,
             "quiet": True,
             "no_warnings": True,
             "js_runtimes": {"deno": {"path": deno_bin}},
         }
+        if self._cookie_file:
+            scan_opts["cookiefile"] = self._cookie_file
         if depth != "All":
             try:
                 scan_opts["playlistend"] = int(depth)
             except ValueError:
                 scan_opts["playlistend"] = 100
         meta_opts = {
-            "cookiefile": self._cookie_file,
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
             "js_runtimes": {"deno": {"path": deno_bin}},
         }
+        if self._cookie_file:
+            meta_opts["cookiefile"] = self._cookie_file
         try:
             with yt_dlp.YoutubeDL(scan_opts) as scanner, yt_dlp.YoutubeDL(meta_opts) as meta:
-                info = scanner.extract_info("https://www.youtube.com/feed/history", download=False, process=False)
-                entries = info.get("entries") if isinstance(info, dict) else None
-                if entries is None:
-                    self.ui_queue.put(("status", "No history entries came back. Is the browser signed in?"))
+                if self._use_local_history:
+                    entries = local_history_entries(self._browser, depth)
+                    if not entries:
+                        self.ui_queue.put(("status", "No YouTube videos were found in Chrome's history."))
                 else:
+                    info = scanner.extract_info("https://www.youtube.com/feed/history", download=False, process=False)
+                    entries = info.get("entries") if isinstance(info, dict) else None
+                    if entries is None:
+                        self.ui_queue.put(("status", "No history entries came back. Is the browser signed in?"))
+                if entries:
                     for entry in entries:
                         if self.cancel_event.is_set():
                             break
@@ -838,8 +954,7 @@ class YTHistoryMusicApp(ctk.CTk):
             if path.endswith(".mp3"):
                 self._final_path = path
 
-        return yt_dlp.YoutubeDL({
-            "cookiefile": self._cookie_file,
+        options = {
             "ffmpeg_location": get_binary_path("ffmpeg"),
             "js_runtimes": {"deno": {"path": get_binary_path("deno")}},
             "format": "bestaudio/best",
@@ -855,7 +970,10 @@ class YTHistoryMusicApp(ctk.CTk):
             "no_warnings": True,
             "progress_hooks": [hook],
             "postprocessor_hooks": [pp_hook],
-        })
+        }
+        if self._cookie_file:
+            options["cookiefile"] = self._cookie_file
+        return yt_dlp.YoutubeDL(options)
 
     def _download_one(self, ydl, item, output_dir):
         self.skip_current.clear()

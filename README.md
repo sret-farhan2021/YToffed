@@ -17,7 +17,7 @@ Finished songs go to your Downloads folder, in a folder named `Downloaded_Songs`
 
 The first time the app reads Chrome on a Mac, the computer asks for your login password. That lets it see which videos you watched. Allow it once. The next time you press Start, it does not ask again.
 
-On Windows, press Start while you are signed in to YouTube in Chrome. If Chrome is open and blocking its login file, the app asks before closing Chrome for a moment. Chrome opens again on its own.
+On Windows, Chrome encrypts its login so the app cannot read it. Press Start anyway. The app uses the YouTube videos already saved in Chrome's history. If Chrome is open and blocking that history, it asks before closing Chrome for a moment. Chrome opens again on its own.
 
 ## Building the app
 
