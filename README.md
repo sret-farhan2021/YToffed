@@ -62,7 +62,7 @@ Expand-Archive -Path "deno.zip" -DestinationPath "."
 .venv\Scripts\pyinstaller --noconfirm YTHistoryMusic.spec
 ```
 
-The program is `dist\YTHistoryMusic\YTHistoryMusic.exe`. Zip the whole `dist\YTHistoryMusic` folder before you send it to someone. The `.exe` by itself will not start.
+The program is the single file `dist\YTHistoryMusic.exe`. Send that file. The first open is slower because Windows unpacks it.
 
 ### Without a Mac or without Windows
 
@@ -71,6 +71,6 @@ GitHub can build both for you.
 1. Open [the Actions page](https://github.com/sret-farhan2021/YToffed/actions).
 2. Open **Build Mac app and Windows exe**.
 3. When the run is green, download **YTHistoryMusic-macOS** or **YTHistoryMusic-Windows**.
-4. Unzip it and open the app. On Windows, run `YTHistoryMusic.exe` from inside the unzipped folder.
+4. Unzip the download. On a Mac, open the app. On Windows, run `YTHistoryMusic.exe`. GitHub wraps that file in a zip, so unzip it first and then open the exe. Opening the exe from inside the zip makes Windows show “Failed to start embedded python interpreter.”
 
 The Mac file from GitHub is for Apple Silicon.
